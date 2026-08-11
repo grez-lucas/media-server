@@ -84,6 +84,14 @@ are not re-litigated without a superseding decision.
   Writing it found three real defects in 001's compose file - hardcoded
   `container_name`, fixed host ports, and liveness mistaken for readiness - all
   fixed.
+- [Decide the image pinning strategy](tickets/008-image-pinning-strategy.md) -
+  Pin `<version>@sha256:<digest>`, update via Renovate PRs (one per service,
+  majors need approval), gate merges on the portability check. Reproducibility
+  and currency both kept rather than traded. A bare version tag would not have
+  been reproducible: LinuxServer rebuilds tags in place and jellyfin's `latest`
+  already moved `ubu2404` -> `ubu2604`. CI green on the pinned commit (run
+  31533869813). Renovate install and branch protection are not done - they need
+  a human and became [Enable the update pipeline on GitHub](tickets/009-enable-the-update-pipeline.md).
 
 ## Not yet specified
 
