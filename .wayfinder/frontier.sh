@@ -1,45 +1,38 @@
 #!/usr/bin/env bash
-# Lists the frontier: open, unclaimed tickets whose blockers are all closed.
+# Lists the wayfinder frontier from GitHub Issues: open, unassigned tickets whose
+# blocking issues are all closed.
+#
 # Usage: .wayfinder/frontier.sh [--all]
 set -euo pipefail
 
-cd "$(dirname "$0")/tickets"
-
-field() { sed -n "s/^$2: *//p" "$1" | head -1; }
-
-declare -A state
-for f in *.md; do
-  state["$(field "$f" id)"]="$(field "$f" state)"
-done
+REPO="${WAYFINDER_REPO:-grez-lucas/media-server}"
+MAP=$(gh issue list --repo "$REPO" --label wayfinder:map --state all --limit 1 --json number --jq '.[0].number')
+[ -n "$MAP" ] || { echo "no issue labelled wayfinder:map in $REPO" >&2; exit 1; }
 
 show_all="${1:-}"
 
-for f in *.md; do
-  id="$(field "$f" id)"
-  st="$(field "$f" state)"
-  title="$(field "$f" title)"
-  label="$(field "$f" labels | tr -d '[]')"
-  assignee="$(field "$f" assignee)"
-  blockers="$(field "$f" blocked_by | tr -d '[]' | tr ',' ' ')"
+gh api "repos/${REPO}/issues/${MAP}/sub_issues" --paginate \
+  --jq '.[] | {number, title, state, assignees: [.assignees[].login], labels: [.labels[].name]}' \
+| while read -r row; do
+    num=$(printf '%s' "$row" | python3 -c 'import json,sys;print(json.load(sys.stdin)["number"])')
+    title=$(printf '%s' "$row" | python3 -c 'import json,sys;print(json.load(sys.stdin)["title"])')
+    state=$(printf '%s' "$row" | python3 -c 'import json,sys;print(json.load(sys.stdin)["state"])')
+    who=$(printf '%s' "$row" | python3 -c 'import json,sys;print(",".join(json.load(sys.stdin)["assignees"]))')
+    kind=$(printf '%s' "$row" | python3 -c 'import json,sys;print(next((l.split(":")[1] for l in json.load(sys.stdin)["labels"] if l.startswith("wayfinder:")),"?"))')
 
-  open_blockers=""
-  for b in $blockers; do
-    [ "${state[$b]:-open}" != "closed" ] && open_blockers="$open_blockers $b"
+    open_blockers=$(gh api "repos/${REPO}/issues/${num}/dependencies/blocked_by" \
+      --jq '[.[] | select(.state=="open") | "#\(.number)"] | join(" ")' 2>/dev/null || echo "")
+
+    if [ "$state" = "closed" ]; then status="CLOSED  "
+    elif [ -n "$open_blockers" ]; then status="BLOCKED "
+    elif [ -n "$who" ]; then status="CLAIMED "
+    else status="FRONTIER"
+    fi
+
+    if [ "$show_all" = "--all" ] || [ "$status" = "FRONTIER" ]; then
+      printf '%s #%-3s %-58s [%s]' "$status" "$num" "${title:0:58}" "$kind"
+      [ -n "$open_blockers" ] && printf ' blocked by: %s' "$open_blockers"
+      [ -n "$who" ] && printf ' @%s' "$who"
+      printf '\n'
+    fi
   done
-
-  if [ "$st" = "closed" ]; then
-    status="CLOSED   "
-  elif [ -n "$open_blockers" ]; then
-    status="BLOCKED  "
-  elif [ "$assignee" != "null" ] && [ -n "$assignee" ]; then
-    status="CLAIMED  "
-  else
-    status="FRONTIER "
-  fi
-
-  if [ "$show_all" = "--all" ] || [ "$status" = "FRONTIER " ]; then
-    printf '%s %s  %-58s [%s]' "$status" "$id" "$title" "$label"
-    [ -n "$open_blockers" ] && printf ' blocked by:%s' "$open_blockers"
-    printf '\n'
-  fi
-done
