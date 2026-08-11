@@ -1,0 +1,36 @@
+name: Portability
+
+# The destination's central claim is "a clean Ubuntu machine plus a git clone plus
+# one command yields a working stack". This workflow is what makes that claim
+# falsifiable: the ubuntu-24.04 runner IS the clean host, fresh on every run, with
+# no local state to drift.
+#
+# Docker and the Compose plugin are prerequisites, not something the repo installs.
+# GitHub's ubuntu-24.04 image ships both, which is exactly the contract a human
+# following the README would satisfy.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Clean-host round trip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record the host we are claiming to work on
+        run: |
+          echo "::group::Host"
+          lsb_release -a || true
+          docker --version
+          docker compose version
+          echo "::endgroup::"
+
+      - name: Verify portability
+        run: ./scripts/verify-portability.sh
