@@ -34,7 +34,25 @@ SONARR_PORT=18989
 ADMIN_USER="verify"
 ADMIN_PASS="verify-$$-portability"
 
-FIXTURE_TITLE="Portability Fixture (2000)"
+# Convention-shaped on purpose (WF-003): "Title (Year)" folder, and a file that
+# repeats it followed by space-hyphen-space plus a quality label. Jellyfin's
+# multiple-versions feature requires exactly that separator, and Radarr's default
+# used a bare space - so this fixture is what stops that regressing.
+#
+# The provider-id form ("[imdbid-tt...]") is part of the convention but is
+# deliberately NOT used here: a fake id would exercise Jellyfin's remote metadata
+# lookup and make the check network-dependent.
+#
+# TWO files are written into one folder, because that is the only shape that
+# actually discriminates. Measured against Jellyfin 10.11.11:
+#   "Title (Year) - 480p" + "Title (Year) - 720p"  -> 1 item, 2 media sources
+#   "Title (Year) 480p"   + "Title (Year) 720p"    -> 2 items, same film twice
+# A single-file fixture passes under either convention and would prove nothing.
+FIXTURE_TITLE="Portability Fixture"
+FIXTURE_YEAR="2000"
+FIXTURE_DIR="${FIXTURE_TITLE} (${FIXTURE_YEAR})"
+FIXTURE_FILE_A="${FIXTURE_TITLE} (${FIXTURE_YEAR}) - 480p.mp4"
+FIXTURE_FILE_B="${FIXTURE_TITLE} (${FIXTURE_YEAR}) - 720p.mp4"
 
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1" >&2; exit 1; }
@@ -48,12 +66,19 @@ cleanup() {
     docker compose -p "$PROJECT" -f "${WORKDIR}/compose.yaml" logs --tail=40 2>&1 || true
   fi
   docker compose -p "$PROJECT" -f "${WORKDIR}/compose.yaml" down -v >/dev/null 2>&1 || true
-  # Config is written by containers as PUID/PGID; if that is not us, we cannot
-  # remove it directly. Borrow a container to do it rather than demanding sudo.
-  if [ -d "${WORKDIR}/config" ] && ! rm -rf "${WORKDIR}/config" 2>/dev/null; then
-    docker run --rm -v "${WORKDIR}:/w" alpine:3 sh -c 'rm -rf /w/config' >/dev/null 2>&1 || true
+
+  # Anything written through "compose exec" is owned by root on the host, so a
+  # plain rm cannot remove it. Borrow a container to clear the contents, then
+  # remove the directory itself (mktemp made it, so it is ours).
+  #
+  # Never silently swallow this: an earlier version did, and leaked one ~176K
+  # workspace per run with no indication anything was wrong.
+  if ! rm -rf "$WORKDIR" 2>/dev/null; then
+    docker run --rm -v "${WORKDIR}:/w" alpine:3 \
+      sh -c 'rm -rf /w/* /w/.[!.]* 2>/dev/null; true' >/dev/null 2>&1 || true
+    rm -rf "$WORKDIR" 2>/dev/null || true
   fi
-  rm -rf "$WORKDIR" 2>/dev/null || true
+  [ -d "$WORKDIR" ] && printf '  \033[33mNOTE\033[0m leftover workspace not removed: %s\n' "$WORKDIR" >&2
   [ "$rc" -eq 0 ] && printf '\n\033[32mPORTABILITY VERIFIED\033[0m\n' || printf '\n\033[31mPORTABILITY CHECK FAILED\033[0m\n'
   exit $rc
 }
@@ -143,17 +168,19 @@ step "Media fixture"
 
 # Generated, never downloaded: deterministic, tiny, no licensing question, and
 # identical on CI where no library exists.
-dc exec -T jellyfin mkdir -p "/data/movies/${FIXTURE_TITLE}" \
+dc exec -T jellyfin mkdir -p "/data/movies/${FIXTURE_DIR}" \
   || fail "could not create the fixture directory under /data (bind mount permissions?)"
 
-dc exec -T jellyfin /usr/lib/jellyfin-ffmpeg/ffmpeg \
-  -f lavfi -i testsrc=duration=5:size=640x480:rate=24 \
-  -f lavfi -i sine=frequency=440:duration=5 \
-  -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest \
-  -y "/data/movies/${FIXTURE_TITLE}/${FIXTURE_TITLE}.mp4" >/dev/null 2>&1 \
-  || fail "ffmpeg could not write the fixture into the library"
+for f in "$FIXTURE_FILE_A" "$FIXTURE_FILE_B"; do
+  dc exec -T jellyfin /usr/lib/jellyfin-ffmpeg/ffmpeg \
+    -f lavfi -i testsrc=duration=5:size=640x480:rate=24 \
+    -f lavfi -i sine=frequency=440:duration=5 \
+    -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest \
+    -y "/data/movies/${FIXTURE_DIR}/${f}" >/dev/null 2>&1 \
+    || fail "ffmpeg could not write '${f}' into the library"
+done
 
-host_file="${MEDIA_ROOT}/movies/${FIXTURE_TITLE}/${FIXTURE_TITLE}.mp4"
+host_file="${MEDIA_ROOT}/movies/${FIXTURE_DIR}/${FIXTURE_FILE_A}"
 [ -s "$host_file" ] || fail "fixture is not visible on the host at ${host_file} - the bind mount is not working"
 pass "fixture written and visible on the host ($(du -h "$host_file" | cut -f1))"
 
@@ -211,16 +238,37 @@ jf -f -X POST "${JF}/Library/VirtualFolders?name=Movies&collectionType=movies&pa
   || fail "could not add the Movies library pointing at /data/movies"
 pass "Movies library added at /data/movies"
 
-ITEM_ID=""
+ITEM_JSON=""
 for i in $(seq 1 60); do
-  ITEM_ID=$(jf "${JF}/Items?Recursive=true&IncludeItemTypes=Movie&Limit=10" \
-    | grep -o '"Id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
-  [ -n "$ITEM_ID" ] && break
+  ITEM_JSON=$(jf "${JF}/Items?Recursive=true&IncludeItemTypes=Movie&Limit=10&Fields=ProductionYear,MediaSourceCount" || true)
+  case "$ITEM_JSON" in *'"Id"'*) break ;; esac
   jf -X POST "${JF}/Library/Refresh" >/dev/null 2>&1 || true
   sleep 2
 done
-[ -n "$ITEM_ID" ] || fail "Jellyfin never indexed the fixture - it can see the mount but not read the library"
+case "$ITEM_JSON" in
+  *'"Id"'*) : ;;
+  *) fail "Jellyfin never indexed the fixture - it can see the mount but not read the library" ;;
+esac
+
+ITEM_ID=$(printf '%s' "$ITEM_JSON" | grep -o '"Id":"[^"]*"' | head -1 | cut -d'"' -f4)
+ITEM_COUNT=$(printf '%s' "$ITEM_JSON" | grep -o '"Type":"Movie"' | wc -l | tr -d ' ')
+ITEM_YEAR=$(printf '%s' "$ITEM_JSON" | grep -o '"ProductionYear":[0-9]*' | head -1 | cut -d: -f2)
+SOURCE_COUNT=$(printf '%s' "$ITEM_JSON" | grep -o '"MediaSourceCount":[0-9]*' | head -1 | cut -d: -f2)
 pass "fixture indexed by Jellyfin (item ${ITEM_ID}) after ~$((i*2))s"
+
+# WF-003: assert the naming convention, not merely that something was indexed.
+# Both assertions below were measured to fail under the wrong convention.
+[ "$ITEM_YEAR" = "$FIXTURE_YEAR" ] \
+  || fail "year parsed as '${ITEM_YEAR}', expected '${FIXTURE_YEAR}' - the 'Title (Year)' folder convention is not being honoured"
+
+# The discriminating one. Two labelled files in one folder must collapse into a
+# single movie with two versions. Under a bare-space separator Jellyfin indexes
+# them as two separate movies and the library shows the same film twice.
+[ "${ITEM_COUNT:-0}" = "1" ] \
+  || fail "expected 1 movie item, found ${ITEM_COUNT} - the ' - <label>' version convention is not being honoured, so the same film is listed more than once"
+[ "${SOURCE_COUNT:-0}" = "2" ] \
+  || fail "expected 2 media sources on the movie, found ${SOURCE_COUNT:-none} - the two quality variants did not group as versions"
+pass "convention honoured: 1 movie, year ${ITEM_YEAR}, ${SOURCE_COUNT} versions grouped"
 
 # The assertion that actually matters: bytes come back out.
 BYTES=$(jf -o /dev/null -w '%{size_download}' \
