@@ -88,6 +88,36 @@ Decisions:
 PORTABILITY VERIFIED   (exit 0)
 ```
 
+### Verified green on the clean host - the destination's claim now holds
+
+Run https://github.com/grez-lucas/media-server/actions/runs/31533312916, exit 0.
+
+```
+Ubuntu 24.04.4 LTS
+Docker version 28.0.4, build b8034c0
+Docker Compose version v2.38.2
+
+  PASS docker daemon reachable
+  PASS compose.yaml parses with every variable resolved
+  PASS stack started
+  PASS jellyfin ready after ~16s
+  PASS radarr ready after ~2s
+  PASS sonarr ready after ~2s
+  PASS all three services see the library at /data with movies+tv
+  PASS fixture written and visible on the host (152K)
+  PASS startup wizard completed
+  PASS authenticated as verify
+  PASS Movies library added at /data/movies
+  PASS fixture indexed by Jellyfin (item 2d36beb11b8565b12396fc6307669f45) after ~2s
+  PASS streamed 65536 bytes back from the library
+PORTABILITY VERIFIED
+```
+
+Worth noting the runner ships **Docker 28.0.4 / Compose v2.38.2** against this
+host's **29.7.1 / 5.4.0**. The pass therefore also demonstrates the stack does not
+depend on the local Docker version, which a same-version rerun could not have
+shown. It does *not* yet say anything about image drift - that is 008.
+
 ### Defects the test found in ticket 001's work
 
 Writing the test was worth it before it ever ran on CI - it found three real

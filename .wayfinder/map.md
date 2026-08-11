@@ -78,8 +78,10 @@ are not re-litigated without a superseding decision.
   Acceptance criterion is now `scripts/verify-portability.sh` exiting 0 on a
   GitHub Actions `ubuntu-24.04` runner. Docker is an asserted prerequisite, never
   installed. The test asserts a full round trip against a self-generated ffmpeg
-  fixture (synthesise, index, stream bytes back), not liveness. Verified green
-  locally. Writing it found three real defects in 001's compose file - hardcoded
+  fixture (synthesise, index, stream bytes back), not liveness. **Green on CI**
+  (run 31533312916) against Ubuntu 24.04.4 with a different Docker version than
+  the dev host, so the destination's portability claim now holds with evidence.
+  Writing it found three real defects in 001's compose file - hardcoded
   `container_name`, fixed host ports, and liveness mistaken for readiness - all
   fixed.
 
