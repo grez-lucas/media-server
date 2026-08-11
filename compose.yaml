@@ -11,10 +11,16 @@ name: media-server
 # instance (the portability harness, or a staging stack) from ever coexisting.
 # Compose namespaces containers by project instead. Host ports are injected for
 # the same reason - a host that already uses 8096 can still run this.
+#
+# Images carry BOTH a version tag and a digest. The digest is what Docker
+# enforces, so the runtime is reproducible; the tag is what a human reads in a
+# diff. LinuxServer rebuilds tags in place for base-OS patches (ls43 -> ls44), so
+# a bare version tag would NOT be reproducible. Renovate raises those rebuilds as
+# digest-update PRs, gated by the portability check - see renovate.json (WF-008).
 
 services:
   jellyfin:
-    image: lscr.io/linuxserver/jellyfin:latest
+    image: lscr.io/linuxserver/jellyfin:10.11.11@sha256:0dd18f8de37c7cfbe76877a8b928943b3588beb9678fb223121914ec9a3cdf7c
     restart: unless-stopped
     environment:
       PUID: ${PUID}
@@ -27,7 +33,7 @@ services:
       - "${JELLYFIN_PORT:-8096}:8096"
 
   radarr:
-    image: lscr.io/linuxserver/radarr:latest
+    image: lscr.io/linuxserver/radarr:6.3.0@sha256:a45b5ab0f850f39edb4cc9c95bbd967b52ddc3d4574a4dfb45561177db6c88f4
     restart: unless-stopped
     environment:
       PUID: ${PUID}
@@ -40,7 +46,7 @@ services:
       - "${RADARR_PORT:-7878}:7878"
 
   sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
+    image: lscr.io/linuxserver/sonarr:4.0.19@sha256:373159ba768e23a3a1c497d9f2b936addf8fd5b1fdce7dd6a14080ac928bfda0
     restart: unless-stopped
     environment:
       PUID: ${PUID}

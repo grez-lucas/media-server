@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests"
+  ],
+  "timezone": "America/Santiago",
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "One PR per service, never grouped. A bad image upgrade should be isolated to the service it breaks, and the portability check should be able to attribute the failure.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["lscr.io/linuxserver/**"],
+      "groupName": null
+    },
+    {
+      "description": "Major bumps need explicit approval from the dependency dashboard. Radarr and Sonarr run forward-only SQLite schema migrations, so a major upgrade is not reliably undone by pinning back to the previous digest - the database has already moved.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["lscr.io/linuxserver/**"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Digest-only updates are LinuxServer base-OS security rebuilds published under an unchanged version tag. These are exactly what digest pinning would otherwise freeze out, so they must keep flowing. Not automerged: that is a separate decision, not an implied one.",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": false
+    }
+  ]
+}
