@@ -1,0 +1,53 @@
+name: media-server
+
+# LAN-only media stack. Portable by design: every host-specific value is injected
+# from .env, and nothing here assumes hardware. Hardware transcoding is opt-in per
+# host via docker-compose.override.yml - see docker-compose.override.yml.example.
+#
+# All three services mount the library at the SAME container path (/data) so that
+# hardlinks and atomic moves work when the *arr apps import. Do not diverge these.
+#
+# Deliberately no container_name: it would pin names globally and stop a second
+# instance (the portability harness, or a staging stack) from ever coexisting.
+# Compose namespaces containers by project instead. Host ports are injected for
+# the same reason - a host that already uses 8096 can still run this.
+
+services:
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ./config/jellyfin:/config
+      - ${MEDIA_ROOT}:/data
+    ports:
+      - "${JELLYFIN_PORT:-8096}:8096"
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ./config/radarr:/config
+      - ${MEDIA_ROOT}:/data
+    ports:
+      - "${RADARR_PORT:-7878}:7878"
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ./config/sonarr:/config
+      - ${MEDIA_ROOT}:/data
+    ports:
+      - "${SONARR_PORT:-8989}:8989"

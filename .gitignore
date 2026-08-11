@@ -1,0 +1,11 @@
+# Host-specific. Every machine writes its own.
+.env
+
+# Service state: databases, API keys, users, metadata, watch progress.
+# Deliberately NOT committed - see .wayfinder ticket 005, which decides what (if
+# anything) should travel with the repo so a new host reconstitutes state.
+config/
+
+# Per-host opt-in hardware. The committed base compose stays hardware-agnostic.
+docker-compose.override.yml
+compose.override.yaml
