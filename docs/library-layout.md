@@ -97,6 +97,66 @@ The portability check deliberately does **not** use them in its fixture: a fake
 id would exercise Jellyfin's remote metadata lookup and make CI depend on a third
 party. It asserts the parsing this repo controls.
 
+## Extra files on import (Radarr)
+
+```
+importExtraFiles     true
+extraFileExtensions  srt
+```
+
+`importExtraFiles` shipped **off**, which silently dropped any subtitle that came
+alongside an imported release: the video moved into the library and the `.srt`
+was left behind in the source folder. `extraFileExtensions` was already `srt`, so
+the extension list was never the thing holding it back. Turned on 2026-08-12
+while importing a release that carried its own subtitle.
+
+With it on, Radarr renames the sidecar onto the video's basename and carries any
+language suffix through untouched, measured against Radarr 6.3.0:
+
+```
+Logan.2017.1080p.BluRay.x264.VPPV.en.srt
+  -> Logan (2017) [imdbid-tt3315342] - Bluray-1080p.en.srt
+```
+
+Radarr records the result in its `ExtraFiles` table keyed by **relative path**,
+and renames tracked sidecars alongside the video on any later rename or quality
+upgrade. Two consequences worth knowing before touching a subtitle by hand:
+
+- Renaming a sidecar on disk behind Radarr strands that record: the stored path
+  stops matching the file. The orphaning that follows at the next rename is
+  **inferred from the record structure, not measured** - forcing a rename to
+  observe it would rewrite the library, which this document treats as a
+  migration. Restage and reimport instead, or `RescanMovie` to rebuild the
+  record.
+- The language suffix rides along as part of the basename. `languageTags` on the
+  record stays `[]` - Radarr did not parse `.en` into a structured tag, so it
+  would not re-derive the suffix if a filename ever lost it.
+
+**Extra-file matching is per source folder, not per release.** Importing two
+releases from one flat staging folder attached the first film's `.srt` to the
+second film's video: Radarr scans the imported file's directory for sidecars and
+does not check that the basenames correspond. Observed on a two-film manual
+import, and the reason a manual import stages one release per folder.
+
+## The sidecar naming convention is not settled here
+
+This section records a Radarr **import behaviour** and the drift it fixes. It
+does **not** record the sidecar naming convention, which
+[#13](https://github.com/grez-lucas/media-server/issues/13) deliberately deferred:
+that convention depends on the WebOS subtitle measurement in
+[#14](https://github.com/grez-lucas/media-server/issues/14) and lands with the
+Bazarr build in [#15](https://github.com/grez-lucas/media-server/issues/15).
+
+So the `.en.srt` above is what Radarr currently emits, not a ratified shape. Two
+divergences stand open until #15 closes them:
+
+- The tree already carries two sidecar shapes - `.en.srt` from a Radarr import and
+  `Carrie (1976) - 1080p.es.srt` placed by hand. Neither is authoritative yet.
+- #13 makes Bazarr the writer of fetched subtitles. Radarr importing a subtitle
+  that shipped inside a release is a different path and does not conflict with
+  that, but which of the two owns a sidecar when both could supply one is
+  #15 territory.
+
 ## Changing any of this
 
 Cheap now, expensive later. These templates rewrite the library on the next
