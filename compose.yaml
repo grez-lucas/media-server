@@ -1,8 +1,16 @@
 name: media-server
 
 # LAN-only media stack. Portable by design: every host-specific value is injected
-# from .env, and nothing here assumes hardware. Hardware transcoding is opt-in per
-# host via docker-compose.override.yml - see docker-compose.override.yml.example.
+# from .env, and nothing here assumes hardware.
+#
+# Hardware transcoding is deliberately UNBUILT, and no override file ships - not
+# even an example, which would be an untested claim under another filename. The
+# library direct plays on the WebOS client, so there is nothing to accelerate.
+# It gets built when a trigger fires, as a gitignored per-host override
+# (compose.override.yaml), never here. The device is NOT settled: a host may
+# expose Intel VAAPI/QSV via /dev/dri or NVIDIA NVENC via the nvidia runtime, and
+# those are different overrides. See
+# https://github.com/grez-lucas/media-server/issues/9
 #
 # All three services mount the library at the SAME container path (/data) so that
 # hardlinks and atomic moves work when the *arr apps import. Do not diverge these.
