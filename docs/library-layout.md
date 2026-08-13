@@ -6,7 +6,16 @@ else writes to the library tree.
 
 This file is the committed record. The live settings sit in `config/`, which is
 gitignored, so **this document is the source of truth and the running config is a
-copy of it**. Whether that copy should be seeded automatically is WF-005.
+copy of it**.
+
+Whether that copy should be seeded automatically was WF-005, and
+[#7](https://github.com/grez-lucas/media-server/issues/7) answered **yes**: a seed
+script applies these conventions to a new host. That splits this document's job in
+two - a declarative data file will own the **values**, and this document will own
+the **reasoning** below, with CI asserting the running stack matches the file. The
+split lands with the seed in
+[#17](https://github.com/grez-lucas/media-server/issues/17); until then this
+document remains authoritative for both.
 
 ## Roots
 
