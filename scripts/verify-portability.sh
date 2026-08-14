@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 #
 # Proves the destination's central claim: a clean Ubuntu machine plus a git clone
-# plus one command yields a working stack.
+# plus "docker compose up -d" plus "scripts/seed.sh" yields a working stack that
+# already knows this repo's conventions.
 #
 # Asserts a full round trip, not liveness - it synthesises its own media fixture,
 # makes Jellyfin index it, and streams bytes back. Containers reaching "running"
 # and UIs returning 200 were both already true while the library was unreadable,
 # so neither is worth asserting on its own.
+#
+# It BOOTSTRAPS THROUGH scripts/seed.sh rather than keeping its own inline copy.
+# Otherwise the bootstrap that ships to users is the one CI never exercises, and
+# the naming conventions get asserted in two places that rot apart. A consequence
+# worth knowing: running the seed a second time and requiring a no-op is what
+# asserts the running stack still matches seed/conventions.json, because the
+# seeder IS the drift checker. There is no separate comparison to maintain.
 #
 # Runs identically on a GitHub Actions ubuntu-24.04 runner and on a developer
 # machine: it copies the compose file into a scratch workspace under its own
@@ -31,8 +39,13 @@ JELLYFIN_PORT=18096
 RADARR_PORT=17878
 SONARR_PORT=18989
 
+# Injected into .env below, then consumed by the seed. Nothing here is ever read
+# back off disk - the same "secrets are injected, never discovered" rule the seed
+# is built on.
 ADMIN_USER="verify"
 ADMIN_PASS="verify-$$-portability"
+RADARR_API_KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+SONARR_API_KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
 # Convention-shaped on purpose (WF-003): "Title (Year)" folder, and a file that
 # repeats it followed by space-hyphen-space plus a quality label. Jellyfin's
@@ -117,6 +130,10 @@ cat >> "${WORKDIR}/.env" <<EOF
 JELLYFIN_PORT=${JELLYFIN_PORT}
 RADARR_PORT=${RADARR_PORT}
 SONARR_PORT=${SONARR_PORT}
+RADARR_API_KEY=${RADARR_API_KEY}
+SONARR_API_KEY=${SONARR_API_KEY}
+JELLYFIN_ADMIN_USER=${ADMIN_USER}
+JELLYFIN_ADMIN_PASSWORD=${ADMIN_PASS}
 EOF
 pass "built .env from .env.example with MEDIA_ROOT=${MEDIA_ROOT}"
 
@@ -125,32 +142,128 @@ dc() { docker compose -p "$PROJECT" -f "${WORKDIR}/compose.yaml" --env-file "${W
 dc config --quiet || fail "compose.yaml does not parse, or a variable is unresolved"
 pass "compose.yaml parses with every variable resolved"
 
-# --- 3. the one command -----------------------------------------------------
+# --- 3. step two of three ---------------------------------------------------
 step "docker compose up -d"
 
 dc up -d --quiet-pull >/dev/null 2>&1 || fail "'docker compose up -d' failed"
 pass "stack started"
 
-# Readiness, not liveness. Jellyfin serves HTTP 200 on "/" (static web UI) while
-# the server itself is still starting and every API call answers
-# 503 "Jellyfin Server is loading". Polling "/" therefore passes too early and the
-# next step fails for a reason that looks unrelated. Probe an endpoint that only
-# answers once the application is genuinely up, and match on its body.
-wait_ready() {
-  local name="$1" port="$2" path="$3" needle="$4" i body
-  for i in $(seq 1 90); do
-    body=$(curl -s --max-time 5 "http://127.0.0.1:${port}${path}" || true)
-    case "$body" in
-      *"$needle"*) pass "${name} ready after ~$((i*2))s"; return 0 ;;
-    esac
-    sleep 2
-  done
-  fail "${name} never became ready on port ${port}${path} (last body: ${body:0:120})"
+# --- 3b. step three of three ------------------------------------------------
+step "scripts/seed.sh"
+
+# The seed owns readiness, so the harness no longer waits separately. Its probes
+# are the readiness-not-liveness ones issue #6 established: Jellyfin serves
+# HTTP 200 on "/" while every API call still answers 503 "Jellyfin Server is
+# loading", so anything polling "/" passes too early.
+"${REPO_ROOT}/scripts/seed.sh" --env-file "${WORKDIR}/.env" \
+  || fail "the seed failed on a blank host - see its output above"
+pass "seed applied this repo's conventions to a blank host"
+
+# Running it again must be a no-op, and that is TWO assertions in one:
+#   - idempotence, demonstrated rather than claimed in a comment
+#   - the running stack still matches seed/conventions.json, because
+#     converge-or-refuse means the seeder IS the drift checker
+# A stack that had drifted would exit 1 here with the differences printed.
+SEED_AGAIN="$(mktemp -t seed-again-XXXXXX)"
+if "${REPO_ROOT}/scripts/seed.sh" --env-file "${WORKDIR}/.env" >"$SEED_AGAIN" 2>&1; then
+  grep -q 'ALREADY SEEDED' "$SEED_AGAIN" \
+    || { cat "$SEED_AGAIN" >&2; fail "second seed run exited 0 but did not report a no-op"; }
+  grep -q 'SET ' "$SEED_AGAIN" \
+    && { cat "$SEED_AGAIN" >&2; fail "second seed run WROTE something - the seed is not idempotent"; }
+  pass "second seed run is a no-op: idempotent, and the stack matches the data file"
+else
+  cat "$SEED_AGAIN" >&2
+  rm -f "$SEED_AGAIN"
+  fail "second seed run did not exit 0 - the stack does not match seed/conventions.json"
+fi
+rm -f "$SEED_AGAIN"
+
+# --- 3c. converge or REFUSE -------------------------------------------------
+step "The seed refuses a host that disagrees"
+
+# The branch the two runs above cannot reach. They prove "blank -> seeded" and
+# "already matches -> no-op"; neither touches the case the rule exists for, which
+# is a host carrying a value a human deliberated. docs/library-layout.md calls a
+# change to these values a migration rather than an edit, so a seed that quietly
+# overwrote one would be the worst failure this repo has, and until now nothing
+# would have caught it.
+#
+# Perturb, assert the refusal, then --force back so the rest of the harness runs
+# against a conforming stack.
+NAMING_URL="http://127.0.0.1:${RADARR_PORT}/api/v3/config/naming"
+radarr_fmt() {
+  curl -s -H "X-Api-Key: ${RADARR_API_KEY}" "$NAMING_URL" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["standardMovieFormat"])'
 }
 
-wait_ready jellyfin "$JELLYFIN_PORT" /System/Info/Public '"Version"'
-wait_ready radarr   "$RADARR_PORT"   /ping                '"OK"'
-wait_ready sonarr   "$SONARR_PORT"   /ping                '"OK"'
+# Read the declared value rather than restating it, for the same reason the
+# library block below does: a second copy of a value in this file is a second
+# source of truth that rots.
+DECLARED_FMT=$(python3 -c '
+import json, sys
+print(json.load(open(sys.argv[1]))["radarr"]["naming"]["standardMovieFormat"])
+' "${REPO_ROOT}/seed/conventions.json")
+
+BEFORE_FMT=$(radarr_fmt)
+[ "$BEFORE_FMT" = "$DECLARED_FMT" ] \
+  || fail "precondition failed: radarr's format is '${BEFORE_FMT}', expected the declared '${DECLARED_FMT}'"
+
+# Valid, and deliberately so. Radarr VALIDATES naming formats and answers 400 to
+# one it does not like, which silently leaves the value untouched - a first
+# version of this test perturbed nothing and "passed" while proving nothing. The
+# assertion below is what stops that recurring.
+PERTURBED_FMT='{Movie Title} ({Release Year}) - {Quality Full}'
+curl -s -H "X-Api-Key: ${RADARR_API_KEY}" "$NAMING_URL" \
+  | python3 -c '
+import json, sys
+cfg = json.load(sys.stdin)
+cfg["standardMovieFormat"] = sys.argv[1]
+json.dump(cfg, sys.stdout)
+' "$PERTURBED_FMT" > "${WORKDIR}/naming.json"
+
+put_code=$(curl -s -o "${WORKDIR}/naming.out" -w '%{http_code}' -X PUT \
+  -H "X-Api-Key: ${RADARR_API_KEY}" -H 'Content-Type: application/json' \
+  --data-binary @"${WORKDIR}/naming.json" "${NAMING_URL}/1")
+case "$put_code" in
+  2*) : ;;
+  *)  fail "could not perturb radarr's naming config: HTTP ${put_code} - $(head -c 200 "${WORKDIR}/naming.out")" ;;
+esac
+[ "$(radarr_fmt)" = "$PERTURBED_FMT" ] \
+  || fail "the perturbation did not take - this test would prove nothing, so it fails loudly instead"
+pass "perturbed radarr's standardMovieFormat, as a human changing it by hand would"
+
+REFUSE_OUT="$(mktemp -t seed-refuse-XXXXXX)"
+
+# "cmd || rc=$?" and not "if cmd; then ... fi; rc=$?" - the latter captures the
+# status of the IF, which is 0 when the condition was false, so the exit code
+# being asserted would never be the seed's.
+refuse_rc=0
+"${REPO_ROOT}/scripts/seed.sh" --env-file "${WORKDIR}/.env" >"$REFUSE_OUT" 2>&1 || refuse_rc=$?
+
+case "$refuse_rc" in
+  0) cat "$REFUSE_OUT" >&2; rm -f "$REFUSE_OUT"
+     fail "the seed exited 0 against a host that disagrees - it should have refused" ;;
+  1) : ;;
+  *) cat "$REFUSE_OUT" >&2; rm -f "$REFUSE_OUT"
+     fail "the seed exited ${refuse_rc} on disagreement, expected 1 (2 means it failed rather than refused)" ;;
+esac
+grep -q 'REFUSED' "$REFUSE_OUT" \
+  || { cat "$REFUSE_OUT" >&2; rm -f "$REFUSE_OUT"; fail "the seed exited 1 without reporting a refusal"; }
+grep -q 'standardMovieFormat' "$REFUSE_OUT" \
+  || { cat "$REFUSE_OUT" >&2; rm -f "$REFUSE_OUT"; fail "the refusal did not name the value that differs"; }
+rm -f "$REFUSE_OUT"
+
+# The assertion that actually matters. Exiting 1 is worth nothing if it wrote
+# first: what is being protected is the human's value, not the exit code.
+[ "$(radarr_fmt)" = "$PERTURBED_FMT" ] \
+  || fail "the seed REFUSED but wrote anyway - radarr's format is now '$(radarr_fmt)'"
+pass "refused with exit 1, named the difference, and wrote nothing"
+
+"${REPO_ROOT}/scripts/seed.sh" --env-file "${WORKDIR}/.env" --force >/dev/null 2>&1 \
+  || fail "'--force' did not converge the host it had just refused"
+[ "$(radarr_fmt)" = "$DECLARED_FMT" ] \
+  || fail "'--force' exited 0 but radarr's format is '$(radarr_fmt)', not the declared '${DECLARED_FMT}'"
+pass "'--force' converged the same host deliberately"
 
 # --- 4. shared library path -------------------------------------------------
 step "Library path identity across services"
@@ -190,39 +303,10 @@ step "Jellyfin round trip"
 AUTH_HDR='MediaBrowser Client="portability-check", Device="ci", DeviceId="portability-check", Version="1.0.0"'
 JF="http://127.0.0.1:${JELLYFIN_PORT}"
 
-# The /Startup/* endpoints sit behind Jellyfin's FirstTimeSetupOrElevated policy.
-# Sending X-Emby-Authorization makes Jellyfin treat the call as authenticated, the
-# policy then fails, and it answers 404 rather than 403. Send no auth header here.
-# Never swallow the status. A bare "it failed" here costs more to diagnose than
-# the whole check is worth, so every wizard call reports its real code and body.
-post_json() {
-  local desc="$1" url="$2" body="${3:-}" out code
-  if [ -n "$body" ]; then
-    out=$(curl -s -w '\n%{http_code}' -X POST "$url" -H 'Content-Type: application/json' -d "$body" || true)
-  else
-    out=$(curl -s -w '\n%{http_code}' -X POST "$url" || true)
-  fi
-  code="${out##*$'\n'}"
-  case "$code" in
-    2*) return 0 ;;
-    *)  fail "${desc}: HTTP ${code:-none} - $(printf '%s' "${out%$'\n'*}" | head -c 200)" ;;
-  esac
-}
-
-post_json "startup configuration" "${JF}/Startup/Configuration" \
-  '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}'
-
-# GET first, and not for symmetry: it materialises the default startup user that
-# the POST then renames. Without it the POST has nothing to update and Jellyfin
-# answers 404.
-curl -sf "${JF}/Startup/User" >/dev/null || fail "could not read the startup user"
-
-post_json "create admin user" "${JF}/Startup/User" \
-  "{\"Name\":\"${ADMIN_USER}\",\"Password\":\"${ADMIN_PASS}\"}"
-
-post_json "complete startup wizard" "${JF}/Startup/Complete"
-pass "startup wizard completed"
-
+# The startup wizard and the library definitions are NOT created here. The seed
+# already ran both, and duplicating them was the whole defect issue #7 named: the
+# bootstrap that ships to users would be the one CI never exercises. This section
+# authenticates as the admin the seed created and asserts what it produced.
 TOKEN=$(curl -sf -X POST "${JF}/Users/AuthenticateByName" \
   -H 'Content-Type: application/json' \
   -H "X-Emby-Authorization: ${AUTH_HDR}" \
@@ -233,10 +317,40 @@ pass "authenticated as ${ADMIN_USER}"
 
 jf() { curl -s -H "X-Emby-Token: ${TOKEN}" -H "X-Emby-Authorization: ${AUTH_HDR}" "$@"; }
 
-jf -f -X POST "${JF}/Library/VirtualFolders?name=Movies&collectionType=movies&paths=%2Fdata%2Fmovies&refreshLibrary=true" \
-  -H 'Content-Type: application/json' -d '{}' >/dev/null \
-  || fail "could not add the Movies library pointing at /data/movies"
-pass "Movies library added at /data/movies"
+# BOTH libraries, not just Movies. The harness used to create only Movies and so
+# proved nothing about the TV root, which the seed now defines.
+#
+# The names and paths are READ FROM the data file rather than written out again
+# here. The second seed run above is already the authoritative conformance
+# assertion - converge-or-refuse means a no-op proves every declared value
+# matches. This block exists so the CI log shows a human the libraries by name
+# instead of only "ALREADY SEEDED", and deriving it keeps that convenience from
+# quietly becoming a second copy of the values.
+# Parsed, never pattern-matched. These services do not agree on whitespace in
+# their JSON - Jellyfin answers compact, Radarr answers pretty-printed - so a
+# glob for '"path":"/data/movies"' passes on one and fails on the other for a
+# reason that has nothing to do with what is being asserted.
+CONVENTIONS="${REPO_ROOT}/seed/conventions.json"
+if out=$(jf "${JF}/Library/VirtualFolders" | python3 -c '
+import json, sys
+live = json.load(sys.stdin)
+missing = []
+for lib in json.load(open(sys.argv[1]))["jellyfin"]["libraries"]:
+    hit = next((f for f in live if f.get("Name") == lib["name"]), None)
+    if hit is None:
+        missing.append("no Jellyfin library named %r" % lib["name"])
+    elif lib["path"] not in (hit.get("Locations") or []):
+        missing.append("Jellyfin library %r does not include %s (has %s)"
+                       % (lib["name"], lib["path"], hit.get("Locations")))
+    else:
+        print("Jellyfin library %r present at %s" % (lib["name"], lib["path"]))
+if missing:
+    sys.exit("; ".join(missing))
+' "$CONVENTIONS" 2>&1); then
+  printf '%s\n' "$out" | while IFS= read -r line; do pass "$line"; done
+else
+  fail "the seed did not leave the declared Jellyfin libraries: ${out}"
+fi
 
 ITEM_JSON=""
 for i in $(seq 1 60); do
@@ -277,3 +391,33 @@ BYTES=$(jf -o /dev/null -w '%{size_download}' \
 [ "${BYTES:-0}" -gt 1024 ] \
   || fail "streaming returned ${BYTES} bytes - Jellyfin indexed the file but cannot serve it"
 pass "streamed ${BYTES} bytes back from the library"
+
+# --- 7. the *arr root folders ------------------------------------------------
+step "Radarr and Sonarr root folders"
+
+# Same rationale as the Jellyfin library block: the seed's no-op run already
+# proved conformance, and the paths are read from the data file rather than
+# repeated. This is here because "the TV root is configured" is a claim the
+# harness previously could not make at all, and it should be visible.
+for svc in radarr sonarr; do
+  case "$svc" in
+    radarr) port="$RADARR_PORT"; key="$RADARR_API_KEY" ;;
+    sonarr) port="$SONARR_PORT"; key="$SONARR_API_KEY" ;;
+  esac
+  if out=$(curl -s -H "X-Api-Key: ${key}" "http://127.0.0.1:${port}/api/v3/rootfolder" \
+    | python3 -c '
+import json, sys
+live = {r["path"] for r in json.load(sys.stdin)}
+svc = sys.argv[2]
+missing = [p for p in json.load(open(sys.argv[1]))[svc]["rootFolders"] if p not in live]
+for p in sorted(set(json.load(open(sys.argv[1]))[svc]["rootFolders"]) & live):
+    print("%s root folder %s" % (svc, p))
+if missing:
+    sys.exit("%s is missing root folder(s) %s; it has %s"
+             % (svc, missing, sorted(live)))
+' "$CONVENTIONS" "$svc" 2>&1); then
+    printf '%s\n' "$out" | while IFS= read -r line; do pass "$line"; done
+  else
+    fail "$out"
+  fi
+done

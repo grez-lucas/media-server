@@ -47,6 +47,10 @@ services:
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TZ}
+      # Injected, never discovered - so scripts/seed.sh knows the key before the
+      # container starts and never reads the gitignored config tree. With this
+      # set, config.xml is written with no <ApiKey> element at all.
+      RADARR__AUTH__APIKEY: ${RADARR_API_KEY}
     volumes:
       - ./config/radarr:/config
       - ${MEDIA_ROOT}:/data
@@ -60,6 +64,7 @@ services:
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TZ}
+      SONARR__AUTH__APIKEY: ${SONARR_API_KEY}
     volumes:
       - ./config/sonarr:/config
       - ${MEDIA_ROOT}:/data

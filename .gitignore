@@ -9,3 +9,8 @@ config/
 # Per-host opt-in hardware. The committed base compose stays hardware-agnostic.
 docker-compose.override.yml
 compose.override.yaml
+
+# Bytecode from running the seed. It is stdlib-only Python, but the interpreter
+# still caches it next to the source.
+__pycache__/
+*.pyc
