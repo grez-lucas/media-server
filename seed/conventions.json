@@ -1,0 +1,116 @@
+{
+  "_this_file": [
+    "The VALUES the stack's conventions consist of. scripts/seed.sh applies them",
+    "to a clean host and refuses to overwrite a host that disagrees, and CI",
+    "asserts a running stack matches this file.",
+    "",
+    "The REASONING lives in docs/library-layout.md and is not duplicated here.",
+    "Each group carries a _why saying only why the key belongs in this file at",
+    "all; the argument for the value itself is in the doc.",
+    "",
+    "AUTHORED FROM THE DOC, never extracted from a host. Extracting canonises",
+    "settings nobody deliberated. A setting earns a place here by appearing in",
+    "docs/library-layout.md, or by being load-bearing for a closed decision.",
+    "Incidental settings, and settings that merely happen to be set somewhere,",
+    "do not. Keys beginning with _ are commentary and are ignored by the seed."
+  ],
+
+  "jellyfin": {
+    "_why": [
+      "Jellyfin's root folders must use the CONTAINER path. Pointing it at the",
+      "host path yields a silently empty library - docs/library-layout.md, Roots.",
+      "",
+      "Deliberately NOT declared: TypeOptions. A library created through the API",
+      "writes an empty <TypeOptions /> where a UI-created one carries a populated",
+      "block, and issue #7 left open whether empty meant 'fetch nothing'. Measured",
+      "on Jellyfin 10.11.11 with two libraries and one fixture: identical",
+      "ProviderIds, rating, genres, images and overview on both. Empty means",
+      "'fall back to defaults at runtime', so there is nothing here to pin - and",
+      "declaring it would make the seed report a spurious difference against",
+      "every library a human created in the UI."
+    ],
+    "libraries": [
+      {
+        "name": "Movies",
+        "collectionType": "movies",
+        "path": "/data/movies",
+        "options": {
+          "_why": [
+            "SaveSubtitlesWithMedia is a Jellyfin default rather than a choice,",
+            "but issue #13's subtitle pipeline depends on sidecar text subtitles",
+            "sitting beside the video, so it is pinned here to make a silent",
+            "change to that default fail a build instead of a playback."
+          ],
+          "SaveSubtitlesWithMedia": true
+        }
+      },
+      {
+        "name": "TV",
+        "collectionType": "tvshows",
+        "path": "/data/tv",
+        "options": {
+          "SaveSubtitlesWithMedia": true
+        }
+      }
+    ]
+  },
+
+  "radarr": {
+    "rootFolders": ["/data/movies"],
+    "naming": {
+      "_why": [
+        "docs/library-layout.md, Movies (Radarr). renameMovies is what makes",
+        "Radarr authoritative for the tree at all. The ' - ' before the quality",
+        "label in standardMovieFormat is load-bearing and not cosmetic: measured",
+        "on Jellyfin 10.11.11, the shipped bare space lists one film twice",
+        "instead of grouping it as two versions."
+      ],
+      "renameMovies": true,
+      "movieFolderFormat": "{Movie Title} ({Release Year}) [imdbid-{ImdbId}]",
+      "standardMovieFormat": "{Movie Title} ({Release Year}) [imdbid-{ImdbId}] - {Quality Full}"
+    },
+    "mediaManagement": {
+      "_why": [
+        "copyUsingHardlinks is load-bearing for compose.yaml's rule that every",
+        "service mounts the library at the SAME container path - hardlinks and",
+        "atomic moves on import are the whole reason that rule exists.",
+        "",
+        "importExtraFiles shipped OFF and silently dropped any subtitle that",
+        "arrived alongside a release: the video moved into the library and the",
+        ".srt was left behind. docs/library-layout.md, Extra files on import."
+      ],
+      "copyUsingHardlinks": true,
+      "importExtraFiles": true,
+      "extraFileExtensions": "srt"
+    }
+  },
+
+  "sonarr": {
+    "rootFolders": ["/data/tv"],
+    "naming": {
+      "_why": [
+        "docs/library-layout.md, Shows (Sonarr). Two divergences from the",
+        "shipped defaults: the series folder carries the year, because without",
+        "one 'The Office' has to be disambiguated against unrelated shows; and",
+        "the season folder is zero-padded, because 'Season 1' sorts wrongly past",
+        "nine seasons."
+      ],
+      "renameEpisodes": true,
+      "seriesFolderFormat": "{Series Title} ({Series Year}) [tvdbid-{TvdbId}]",
+      "seasonFolderFormat": "Season {season:00}",
+      "standardEpisodeFormat": "{Series Title} - S{season:00}E{episode:00} - {Episode Title} {Quality Full}"
+    },
+    "mediaManagement": {
+      "_why": [
+        "The same two reasons as Radarr's, which apply to Sonarr unchanged - a",
+        "TV release carrying its own .srt drops it on import exactly as a movie",
+        "release did. Recorded here because authoring from the doc generalises",
+        "the doc's reasoning; the doc observed it on Radarr only because that is",
+        "where it was first hit."
+      ],
+      "copyUsingHardlinks": true,
+      "importExtraFiles": true,
+      "extraFileExtensions": "srt"
+    }
+  }
+}
