@@ -25,6 +25,12 @@
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["digest"],
       "automerge": false
+    },
+    {
+      "description": "CI tooling majors need the same approval as image majors. Every rule above is scoped to the compose images, which left `.github/workflows/portability.yml` governed by nothing: `actions/checkout` and the `ubuntu` runner are picked up by the github-actions manager regardless. That workflow is the merge gate itself, so a breaking bump to it must be a deliberate act rather than an automatic PR.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
     }
   ]
 }
