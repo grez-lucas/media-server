@@ -62,7 +62,7 @@ is no second tool to keep in step.
 ```
 compose.yaml                 the stack. Images pinned <version>@sha256:<digest>
 seed/conventions.json        the VALUES the conventions consist of
-docs/library-layout.md       the REASONING behind those values
+docs/library-layout.md       the REASONING behind those values, and the import runbook
 scripts/seed.sh              applies them, or refuses and explains
 scripts/verify-portability.sh  the clean-host round trip CI runs
 .env.example                 every host-specific value, documented
@@ -79,8 +79,28 @@ scripts/verify-portability.sh  the clean-host round trip CI runs
   hardware-agnostic. Transcoding gets built when a named trigger fires, as a
   gitignored per-host override - see
   [#9](https://github.com/grez-lucas/media-server/issues/9).
-- **Not a downloader.** Radarr and Sonarr ship as library organisers with no
-  indexer and no download client configured.
+- **Not a downloader, by design.** No indexer and no download client are
+  configured. Radarr and Sonarr organise, rename and monitor a library that is
+  filled by hand.
+
+  This one is **additive-friendly**, which is the part worth knowing: nothing in
+  the library layout, the seed or the subtitle pipeline depends on how a file
+  arrived, so acquisition can be added later as new work rather than as rework.
+  It is a decision, not a limitation to route around.
+
+## Putting a film you downloaded into the library
+
+The procedure is the *Runbook* section of
+[docs/library-layout.md](docs/library-layout.md) - stage under
+`${MEDIA_ROOT}/staging` one release per folder, add the title in Radarr or
+Sonarr, manual import, scan Jellyfin. It covers both subtitle cases: one that
+shipped inside the release, and one you place by hand afterwards.
+
+It lives beside the conventions rather than in a document of its own so that a
+rule and the step which depends on it cannot drift apart. The short version:
+**Radarr and Sonarr write the library tree and you do not.** Copying a file into
+`${MEDIA_ROOT}/movies` yourself skips the component that imposes the naming
+Jellyfin needs, and silently leaves any subtitle behind.
 
 ## Planning
 
