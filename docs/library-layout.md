@@ -18,6 +18,11 @@ gitignored `config/` tree where nothing could check them.
 | this document | why each value is what it is | a human reading it |
 | `seed/conventions.json` | the values themselves | `scripts/seed.sh` on every CI push |
 
+Since [#22](https://github.com/grez-lucas/media-server/issues/22) this document
+also carries the **procedure** that applies these conventions - see *Runbook*
+below. It sits here rather than in a document of its own so that a rule and the
+step which depends on it cannot drift apart.
+
 So a value appears in **exactly one** place. When they disagree the data file is
 what runs, which is precisely why every value in it has to trace back to a
 paragraph here - `seed/conventions.json` was **authored from this document**,
@@ -139,7 +144,7 @@ Logan.2017.1080p.BluRay.x264.VPPV.en.srt
   -> Logan (2017) [imdbid-tt3315342] - Bluray-1080p.en.srt
 ```
 
-Radarr records the result in its `ExtraFiles` table keyed by **relative path**,
+Radarr records the result in its `SubtitleFiles` table keyed by **relative path**,
 and renames tracked sidecars alongside the video on any later rename or quality
 upgrade. Two consequences worth knowing before touching a subtitle by hand:
 
@@ -153,11 +158,10 @@ upgrade. Two consequences worth knowing before touching a subtitle by hand:
   record stays `[]` - Radarr did not parse `.en` into a structured tag, so it
   would not re-derive the suffix if a filename ever lost it.
 
-**Extra-file matching is per source folder, not per release.** Importing two
-releases from one flat staging folder attached the first film's `.srt` to the
-second film's video: Radarr scans the imported file's directory for sidecars and
-does not check that the basenames correspond. Observed on a two-film manual
-import, and the reason a manual import stages one release per folder.
+Extra-file matching is **per source folder, not per release**, which is why a
+manual import stages one release per folder. That rule and the incident behind it
+are in the *Runbook* below, where someone about to stage two films will actually
+read them.
 
 ## The sidecar naming convention is not settled here
 
@@ -190,6 +194,133 @@ Recorded here rather than silently copied into the data file: authoring the data
 file *from this document* is what generalises the Radarr paragraph above to
 Sonarr. The document observed it on Radarr only because that is where it was
 first hit, not because it was ever a movies-only concern.
+
+## Runbook: getting a release into the library
+
+Everything above is the conventions. This is the procedure that applies them, for
+a release you have already downloaded. This repo is **not a downloader** - there
+is no indexer and no download client - so nothing here happens on its own.
+
+**Radarr and Sonarr write the library tree; you do not.** Copying a file into
+`${MEDIA_ROOT}/movies` by hand skips renaming, so none of the conventions above
+are applied, and skips `importExtraFiles`, so a sidecar subtitle is left behind.
+Both failures are silent, and both are recorded above as having happened here.
+
+### Stage under `${MEDIA_ROOT}/staging`
+
+The containers see it as `/data/staging`. Four reasons it is that path and not
+another:
+
+- **Not `~/Downloads`.** The containers mount only `${MEDIA_ROOT}` at `/data`, so
+  anything outside that tree is invisible to Radarr entirely - not slow, not
+  awkward, invisible.
+- **Inside `MEDIA_ROOT` on purpose.** It makes the same-filesystem guarantee
+  structural rather than remembered, so an import is an instant `rename(2)`
+  instead of a full copy of the bytes. It is the same guarantee `copyUsingHardlinks`
+  needs to link rather than copy.
+- **Jellyfin never sees it.** Its libraries point at `/data/movies` and `/data/tv`,
+  not at `/data`, so a half-staged release is not a half-visible film.
+- **One release per folder.** Extra-file matching is per *source folder*, not per
+  release: importing two releases from one flat staging folder attached the first
+  film's `.srt` to the second film's video, because Radarr scans the imported
+  file's directory for sidecars and does not check that the basenames correspond.
+  Observed on a two-film manual import.
+
+```
+${MEDIA_ROOT}/staging/
+  Some.Film.2019.1080p.BluRay.x264-GROUP/
+    Some.Film.2019.1080p.BluRay.x264-GROUP.mkv
+    Some.Film.2019.1080p.BluRay.x264-GROUP.en.srt
+```
+
+Creating that directory is **out of scope here**: nothing currently creates
+`movies/`, `tv/` or `staging/` on a clean host, and that is
+[#21](https://github.com/grez-lucas/media-server/issues/21)'s territory.
+
+### 1. Add the title before importing, not after
+
+| | where | root folder |
+|---|---|---|
+| film | Radarr → Movies → Add New (`/add/new`) | `/data/movies` |
+| series | Sonarr → Series → Add New (`/add/new`) | `/data/tv` |
+
+Leave **search on add** off; there is no indexer for it to search.
+
+Do this first. Measured on Radarr 6.3.0 and Sonarr 4.0.19: a manual import of a
+folder whose title is not yet in the library returns a **permanent** rejection -
+`Unknown Movie` and `Unknown Series` respectively. Adding it first makes the same
+folder map cleanly to it, and is also where the `[imdbid-...]` / `[tvdbid-...]` in
+the folder name comes from, since the *arr app populates the provider id from the
+entry you just added.
+
+### 2. Stage the release
+
+One folder per release, as above. Leave the subtitle's filename exactly as it
+came: Radarr renames it onto the video's basename on import and carries the
+language suffix through untouched.
+
+### 3. Import through the *arr app
+
+**Activity → Queue** (`/activity/queue`) → **Manual Import**, given the container
+path:
+
+```
+/data/staging/Some.Film.2019.1080p.BluRay.x264-GROUP
+```
+
+Three things about that modal, measured against the 6.3.0 and 4.0.19 APIs:
+
+- **Only the video file is listed.** A staged folder holding a `.mkv` and a
+  `.en.srt` returns exactly one row, the `.mkv`. The subtitle does not appear and
+  does not need selecting - it rides along as an extra file.
+- **Check the matched title and the quality** in the row before importing, and
+  correct them there if the release name parsed wrongly.
+- **Import Mode has no default** and must be chosen: `Move Files` or
+  `Hardlink/Copy Files`. Nothing seeds it, so it is a per-import decision. Move,
+  unless you have a reason to keep the staged copy.
+
+### 4. Check what landed, then scan
+
+```bash
+ls -l "${MEDIA_ROOT}/movies/Some Film (2019) [imdbid-tt1234567]/"
+```
+
+The video and, if the release carried one, the sidecar - both on one basename:
+
+```
+Some Film (2019) [imdbid-tt1234567] - Bluray-1080p.mkv
+Some Film (2019) [imdbid-tt1234567] - Bluray-1080p.en.srt
+```
+
+A **missing** sidecar where the release definitely had one points at
+`importExtraFiles` having drifted off. `scripts/seed.sh` will say so.
+
+Then Jellyfin → **Dashboard** → **Libraries** → **Scan All Libraries**, and confirm
+the title appears. Explicitly, rather than waiting: Jellyfin's own filesystem
+monitoring is not something this repo has measured.
+
+### When the release carries no subtitle
+
+Then there is nothing for step 3 to carry, and you place one by hand **after** the
+import - never before, because the name it has to match does not exist until the
+*arr app has written it.
+
+1. Import the video first.
+2. Name the subtitle as the video's basename plus a language suffix plus `.srt`:
+
+   ```
+   Dracula (2025) [imdbid-tt31434030] - Bluray-1080p.mp4
+   Dracula (2025) [imdbid-tt31434030] - Bluray-1080p.es.srt
+   ```
+
+3. **Rescan Movie**, so Radarr records a sidecar it did not place. An untracked
+   file is one the next rename leaves behind.
+4. Scan Jellyfin, and check the subtitle track appears on the film.
+
+Sidecar **text** subtitles are the point: SRT and ASS direct play on the WebOS
+client where an image-based subtitle forces a burn-in re-encode -
+[#14](https://github.com/grez-lucas/media-server/issues/14). Which of Radarr and
+Bazarr owns a sidecar when both could supply one is #15's, as above.
 
 ## What the seed does NOT carry
 
