@@ -206,6 +206,33 @@ is no indexer and no download client - so nothing here happens on its own.
 are applied, and skips `importExtraFiles`, so a sidecar subtitle is left behind.
 Both failures are silent, and both are recorded above as having happened here.
 
+#### About the screenshots below
+
+**The prose is authoritative; the screenshots are an aid.** They were captured on
+**Radarr 6.3.0 and Sonarr 4.0.19**, the versions `compose.yaml` pins today. Nothing
+checks them against a running UI, so a renovate bump of either image can leave them
+showing a screen that no longer exists - the one kind of drift the rest of this
+document is built to prevent. That is the deliberate trade for making the procedure
+followable. When a bump changes a screen, re-capture or delete the image; a wrong
+picture is worse than none. Where a screenshot and the text disagree, the text wins
+and the image is the bug.
+
+#### Radarr's UI may refuse to load at all
+
+Radarr 6.x will not serve its UI while `authenticationMethod` is `none` and
+`authenticationRequired` is `enabled`. Every page renders behind a blocking
+`Authentication Required` modal. The API is unaffected, which is why this can sit
+undetected on a host that is otherwise working. Fix it under Settings → General →
+Security, or over the API, by setting an authentication method - Radarr 6.3.0
+rejects `basic`, so it must be `forms` - with `authenticationRequired` set to
+`disabledForLocalAddresses`, which is the posture Sonarr already uses here and
+keeps the LAN prompt-free.
+
+This is **not** seeded: `seed/conventions.json` carries conventions, and
+authentication is Tier 2 by [#7](https://github.com/grez-lucas/media-server/issues/7)'s
+terms, deferred with the rest of the auth story the README calls a separate effort.
+So `scripts/seed.sh` will not report it and will not fix it.
+
 ### Stage under `${MEDIA_ROOT}/staging`
 
 The containers see it as `/data/staging`. Four reasons it is that path and not
@@ -244,7 +271,19 @@ Creating that directory is **out of scope here**: nothing currently creates
 | film | Radarr → Movies → Add New (`/add/new`) | `/data/movies` |
 | series | Sonarr → Series → Add New (`/add/new`) | `/data/tv` |
 
-Leave **search on add** off; there is no indexer for it to search.
+Type the title into the page's own search box - the wide one in the body, not the
+`Search` box in the header bar, which searches the library you already have:
+
+![Radarr Add New, search results](img/radarr-1-add-new.png)
+
+Sonarr's is the same screen with series instead of films:
+
+![Sonarr Add New, search results](img/sonarr-1-add-new.png)
+
+Click the matching result to expand its add form, then set **Root Folder** to the
+path in the table above, leave **Quality Profile** at the one the rest of the
+library uses, and turn **search on add** off - there is no indexer for it to
+search.
 
 Do this first. Measured on Radarr 6.3.0 and Sonarr 4.0.19: a manual import of a
 folder whose title is not yet in the library returns a **permanent** rejection -
@@ -261,23 +300,68 @@ language suffix through untouched.
 
 ### 3. Import through the *arr app
 
-**Activity → Queue** (`/activity/queue`) → **Manual Import**, given the container
-path:
+**Wanted → Missing** (`/wanted/missing`) → **Manual Import**, in both Radarr and
+Sonarr.
+
+Not Activity → Queue. This document said Queue until 2026-09-14 and it was wrong:
+that page carries only `Refresh`, `Grab Selected` and `Remove Selected`, with no
+Manual Import anywhere on it. Queue lists what a download client is fetching, and
+this stack has no download client, so the page is permanently empty. The button
+lives on Wanted → Missing in Radarr 6.3.0 and Sonarr 4.0.19 alike:
+
+![Sonarr Wanted → Missing, Manual Import in the toolbar](img/sonarr-2-manual-import.png)
+
+Manual Import is enabled even when the list below says `No missing items` - the
+list and the button are unrelated.
+
+#### 3a. Give it the container path
+
+The modal is titled **Manual Import - Select Folder**. Type the **container**
+path, not the host path:
 
 ```
 /data/staging/Some.Film.2019.1080p.BluRay.x264-GROUP
 ```
 
-Three things about that modal, measured against the 6.3.0 and 4.0.19 APIs:
+![The Select Folder modal, path typed](img/sonarr-3-select-folder.png)
+
+Then choose between the two buttons, which is a decision this document previously
+did not mention at all:
+
+- **Interactive Import** - what this runbook means. Lists what it found and lets
+  you check it before anything moves.
+- **Move Automatically** - imports on Radarr's or Sonarr's own judgement, with no
+  chance to correct a bad quality parse. Do not use it here: the parse has been
+  wrong often enough on this library to be worth a look every time.
+
+#### 3b. Check the row, then import
+
+![Sonarr interactive import, one row and the import mode selector](img/sonarr-4-interactive-import.png)
+
+Radarr's grid is the same shape, with `Movie` where Sonarr has `Series`, `Season`
+and `Episodes`:
+
+![Radarr interactive import](img/radarr-4-interactive-import.png)
+
+Four things about that grid, measured against Radarr 6.3.0 and Sonarr 4.0.19:
 
 - **Only the video file is listed.** A staged folder holding a `.mkv` and a
-  `.en.srt` returns exactly one row, the `.mkv`. The subtitle does not appear and
+  `.es.srt` returns exactly one row, the `.mkv`. The subtitle does not appear and
   does not need selecting - it rides along as an extra file.
 - **Check the matched title and the quality** in the row before importing, and
-  correct them there if the release name parsed wrongly.
-- **Import Mode has no default** and must be chosen: `Move Files` or
-  `Hardlink/Copy Files`. Nothing seeds it, so it is a per-import decision. Move,
-  unless you have a reason to keep the staged copy.
+  correct them there if the release name parsed wrongly. Click the quality badge
+  to change it. Release names lie: a `HDRip` in the name over a Blu-ray remux
+  source, and a name with no source token at all, have both been seen here and
+  both parsed to something wrong.
+- **Import Mode has no default.** The selector reads `Choose Import Mode` until
+  you pick `Move Files` or `Hardlink/Copy Files`. Nothing seeds it, so it is a
+  per-import decision. Move, unless you have a reason to keep the staged copy.
+- **A red `!` on the row is not necessarily blocking.** Hover it to read why it
+  is there; a row can carry one and still import. The API reports the same thing
+  as `rejections`, and an empty `rejections` list means nothing is stopping the
+  import whatever the icon suggests.
+
+The green **Import** button commits. Until then nothing on disk has moved.
 
 ### 4. Check what landed, then scan
 
